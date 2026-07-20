@@ -2,7 +2,6 @@
 REM GUI: atualiza a base contornando o erro 403 do dbchangelog-latest.xsd.
 REM Copia o build.zip do share, patcha os changelogs (latest -> versao empacotada),
 REM rezipa no pacote do updater e dispara o updater-lite (sem versao = usa o local).
-REM Se nao houver Python, baixa e instala automaticamente (com tkinter).
 setlocal enabledelayedexpansion
 set SCRIPT=%~dp0UpdaterLiteUtil.py
 
@@ -10,29 +9,17 @@ call :find_python
 if defined PYW ( start "" "!PYW!" "%SCRIPT%" & goto :end )
 if defined PY  ( "!PY!" "%SCRIPT%" & goto :end )
 
-echo Python 3 nao encontrado. Baixando o instalador oficial...
-set PYVER=3.12.4
-set PYEXE=%TEMP%\python-%PYVER%-amd64.exe
-set PYURL=https://www.python.org/ftp/python/%PYVER%/python-%PYVER%-amd64.exe
-
-powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%PYURL%' -OutFile '%PYEXE%' } catch { exit 1 }"
-if not exist "%PYEXE%" (
-    echo Falha ao baixar o Python. Instale manualmente de python.org e rode de novo.
+REM Sem Python: mostra mensagem na tela (popup) e encerra.
+set "MSG=Python 3 nao encontrado nesta maquina.\n\nInstale o Python 3 de https://python.org e, no instalador, marque:\n  - Add python.exe to PATH\n  - tcl/tk and IDLE (necessario para a interface)\n\nDepois execute o UpdaterLiteUtil.bat novamente."
+mshta "javascript:alert('%MSG%');close();" 2>nul
+if errorlevel 1 (
+    echo(
+    echo Python 3 nao encontrado. Instale de https://python.org
+    echo marcando "Add to PATH" e "tcl/tk", e rode de novo.
+    echo(
     pause
-    exit /b 2
 )
-
-echo Instalando Python %PYVER% (silencioso, com tkinter)...
-"%PYEXE%" /quiet InstallAllUsers=0 PrependPath=1 Include_tcltk=1 Include_pip=1
-REM aguarda o instalador terminar
-timeout /t 8 /nobreak >nul
-
-call :find_python
-if defined PYW ( start "" "!PYW!" "%SCRIPT%" & goto :end )
-if defined PY  ( "!PY!" "%SCRIPT%" & goto :end )
-echo Python instalado mas nao encontrado no PATH. Abra um novo terminal e rode de novo.
-pause
-exit /b 3
+exit /b 2
 
 :find_python
 set PYW=

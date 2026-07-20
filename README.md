@@ -36,8 +36,9 @@ schema mais novo (ex.: `cvc-complex-type.3.2.2 dataType em createSequence`).
 
 ## Uso
 
-Dois cliques em `UpdaterLiteUtil.bat` (abre a GUI). Se não houver Python 3,
-o `.bat` baixa e instala o oficial (com tkinter) automaticamente.
+Dois cliques em `UpdaterLiteUtil.bat` (abre a GUI). Requer **Python 3 com tkinter**
+(marque "tcl/tk" e "Add to PATH" no instalador do python.org). Se o Python não for
+encontrado, o `.bat` exibe uma mensagem na tela com essas instruções.
 
 Na janela:
 - **Branch**: Develop / Release / Master
