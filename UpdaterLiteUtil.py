@@ -38,8 +38,6 @@ LOG_DIR = r"C:\sysmo-updater\logs"
 PSQL = r"C:\Progra~1\PostgreSQL\17\bin\psql.exe"
 INI = r"C:\SysmoVs\dbxconnections.ini"
 
-JAR_IN_ZIP = "liquibase/bin/liquibase.jar"
-SCHEMA_PREFIX = "liquibase/schema/"
 XSD_DIR_IN_JAR = "liquibase/parser/core/xml/"
 MARK = b"dbchangelog-latest.xsd"
 XSD_RE = re.compile(r"dbchangelog-(\d+)\.(\d+)\.xsd")
@@ -81,19 +79,43 @@ CREATE_NO_WINDOW = 0x08000000
 
 # ----------------------------- logica de negocio -----------------------------
 
-def newest_bundled_xsd(zip_src):
-    data = zip_src.read(JAR_IN_ZIP)
-    best = None
-    with zipfile.ZipFile(io.BytesIO(data)) as jz:
-        for n in jz.namelist():
-            m = XSD_RE.search(n)
-            if m:
-                v = (int(m.group(1)), int(m.group(2)))
-                if best is None or v > best[0]:
-                    best = (v, "dbchangelog-%d.%d.xsd" % v)
-    if best is None:
-        raise RuntimeError("Nenhum dbchangelog-N.N.xsd empacotado no jar.")
-    return best[1]
+def find_liquibase_in_zip(zip_src):
+    """Localiza dinamicamente o liquibase*.jar dentro do build.zip (o layout muda
+    entre versoes/branches). Retorna:
+      (jar_name, has_latest, newest_target)
+    - jar_name: caminho do jar dentro do zip, ou None se nao achou.
+    - has_latest: True se o jar ja empacota dbchangelog-latest.xsd (4.x -> resolve
+      offline, NAO precisa de fix).
+    - newest_target: 'dbchangelog-<maior>.xsd' empacotado (alvo do rewrite), ou None.
+    """
+    for info in zip_src.infolist():
+        name = info.filename
+        if not name.lower().endswith(".jar"):
+            continue
+        low = name.lower()
+        if "liquibase" not in low.split("/")[-1]:
+            continue
+        try:
+            with zipfile.ZipFile(io.BytesIO(zip_src.read(name))) as jz:
+                # procura os dbchangelog*.xsd em qualquer path dentro do jar
+                xsds = [n for n in jz.namelist()
+                        if n.split("/")[-1].startswith("dbchangelog")
+                        and n.endswith(".xsd")]
+                if not xsds:
+                    continue
+                has_latest = any(n.endswith("dbchangelog-latest.xsd") for n in xsds)
+                best = None
+                for n in xsds:
+                    m = XSD_RE.search(n)
+                    if m:
+                        v = (int(m.group(1)), int(m.group(2)))
+                        if best is None or v > best[0]:
+                            best = (v, "dbchangelog-%d.%d.xsd" % v)
+                newest = best[1] if best else None
+                return name, has_latest, newest
+        except zipfile.BadZipFile:
+            continue
+    return None, False, None
 
 
 def clean_pacote():
@@ -118,19 +140,21 @@ def _rebuild_jar_with_xsds(jar_bytes, target_xsd, perm_xsds):
     (dbchangelog-3.5.xsd) pelo 'latest' permissivo do 4.x e o dbchangelog-ext.xsd
     pelo ext do 4.x. Assim o resolver offline (que so aceita nomes ate 3.5) passa a
     servir um schema que aceita atributos novos (dataType em createSequence etc)."""
-    repl = {}
+    # mapeia por BASENAME (o path do xsd dentro do jar varia); o target (ex 3.5)
+    # recebe o 'latest' permissivo, e o ext recebe o ext permissivo.
+    by_base = {}
     if perm_xsds.get("dbchangelog-latest.xsd"):
-        repl[XSD_DIR_IN_JAR + target_xsd] = perm_xsds["dbchangelog-latest.xsd"]
+        by_base[target_xsd] = perm_xsds["dbchangelog-latest.xsd"]
     if perm_xsds.get("dbchangelog-ext.xsd"):
-        repl[XSD_DIR_IN_JAR + "dbchangelog-ext.xsd"] = perm_xsds["dbchangelog-ext.xsd"]
-    if not repl:
+        by_base["dbchangelog-ext.xsd"] = perm_xsds["dbchangelog-ext.xsd"]
+    if not by_base:
         return jar_bytes, 0
     src = zipfile.ZipFile(io.BytesIO(jar_bytes))
     out = io.BytesIO()
     n = 0
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
         for info in src.infolist():
-            data = repl.get(info.filename)
+            data = by_base.get(info.filename.split("/")[-1])
             if data is not None:
                 n += 1
             else:
@@ -142,8 +166,8 @@ def _rebuild_jar_with_xsds(jar_bytes, target_xsd, perm_xsds):
     return out.getvalue(), n
 
 
-def copy_and_patch(zip_src_path, zip_dst_path, target_xsd, perm_xsds, do_fix,
-                   progress, cancel):
+def copy_and_patch(zip_src_path, zip_dst_path, jar_name, target_xsd, perm_xsds,
+                   do_fix, progress, cancel):
     target = target_xsd.encode() if target_xsd else b""
     patched = 0
     jar_repl = 0
@@ -158,12 +182,11 @@ def copy_and_patch(zip_src_path, zip_dst_path, target_xsd, perm_xsds, do_fix,
             if cancel.is_set():
                 raise _Cancelled()
             data = src.read(info.filename)
-            if do_fix and (info.filename.startswith(SCHEMA_PREFIX)
-                           and info.filename.lower().endswith(".xml")
-                           and MARK in data):
+            if do_fix and info.filename.lower().endswith(".xml") and MARK in data:
+                # detecta changelog pelo conteudo (prefixo do schema varia entre builds)
                 data = data.replace(MARK, target)
                 patched += 1
-            elif do_fix and info.filename == JAR_IN_ZIP and perm_xsds:
+            elif do_fix and info.filename == jar_name and perm_xsds and target_xsd:
                 data, jar_repl = _rebuild_jar_with_xsds(data, target_xsd, perm_xsds)
             zi = zipfile.ZipInfo(info.filename, date_time=info.date_time)
             zi.compress_type = info.compress_type
@@ -269,22 +292,31 @@ def worker(version, branch, fix, msgq, cancel):
             log("ERRO: build.ver nao encontrado: %s" % src_ver)
             msgq.put(("done", False)); return
 
+        jar_name = None
         target_xsd = ""
         perm_xsds = {}
+        do_fix = False
         if fix:
             log("Fix XSD: LIGADO")
-            log("Detectando maior XSD empacotado no liquibase.jar...")
+            log("Localizando o liquibase.jar dentro do build.zip...")
             with zipfile.ZipFile(src_zip) as z:
-                target_xsd = newest_bundled_xsd(z)
-            log("  -> alvo: %s" % target_xsd)
-
-            log("Carregando XSD permissivo de um liquibase 4.x instalado...")
-            perm_xsds, perm_src = load_permissive_xsds()
-            if perm_xsds:
-                log("  -> %s (de %s)" % (", ".join(sorted(perm_xsds)), perm_src))
+                jar_name, has_latest, newest = find_liquibase_in_zip(z)
+            if jar_name is None:
+                log("  liquibase.jar nao encontrado no zip -> copiando sem patch.")
+            elif has_latest:
+                log("  %s ja empacota dbchangelog-latest.xsd (resolve offline)." % jar_name)
+                log("  -> fix DESNECESSARIO nesta versao; copiando sem patch.")
             else:
-                log("  AVISO: liquibase 4.x nao encontrado; o XSD %s (estrito) pode "
-                    "rejeitar atributos novos (ex: dataType em createSequence)." % target_xsd)
+                do_fix = True
+                target_xsd = newest
+                log("  jar: %s | maior XSD empacotado: %s" % (jar_name, target_xsd))
+                log("Carregando XSD permissivo de um liquibase 4.x instalado...")
+                perm_xsds, perm_src = load_permissive_xsds()
+                if perm_xsds:
+                    log("  -> %s (de %s)" % (", ".join(sorted(perm_xsds)), perm_src))
+                else:
+                    log("  AVISO: liquibase 4.x nao encontrado; o XSD %s (estrito) pode "
+                        "rejeitar atributos novos (ex: dataType em createSequence)." % target_xsd)
         else:
             log("Fix XSD: DESLIGADO (copia o build.zip sem patch)")
 
@@ -294,14 +326,14 @@ def worker(version, branch, fix, msgq, cancel):
         log("Copiando build.ver...")
         shutil.copyfile(src_ver, dst_ver)
 
-        log("Copiando%s build.zip..." % (" + patchando" if fix else ""))
+        log("Copiando%s build.zip..." % (" + patchando" if do_fix else ""))
 
         def prog(done, total, patched):
             msgq.put(("prog", done, total, patched))
 
-        n, jar_repl = copy_and_patch(src_zip, dst_zip, target_xsd, perm_xsds, fix,
-                                     prog, cancel)
-        if fix:
+        n, jar_repl = copy_and_patch(src_zip, dst_zip, jar_name, target_xsd, perm_xsds,
+                                     do_fix, prog, cancel)
+        if do_fix:
             log("  -> %d changelog(s) reescritos (dbchangelog-latest.xsd -> %s)"
                 % (n, target_xsd))
             log("  -> %d XSD(s) do liquibase.jar trocados pelo schema permissivo" % jar_repl)
