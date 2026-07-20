@@ -4,7 +4,7 @@ REM Copia o build.zip do share, patcha os changelogs (latest -> versao empacotad
 REM rezipa no pacote do updater e dispara o updater-lite (sem versao = usa o local).
 REM Se nao houver Python, baixa e instala automaticamente (com tkinter).
 setlocal enabledelayedexpansion
-set SCRIPT=%~dp0atualizar_versao_fix_liquibase.py
+set SCRIPT=%~dp0UpdaterLiteUtil.py
 
 call :find_python
 if defined PYW ( start "" "!PYW!" "%SCRIPT%" & goto :end )

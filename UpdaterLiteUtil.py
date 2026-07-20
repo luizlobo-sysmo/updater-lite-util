@@ -142,8 +142,9 @@ def _rebuild_jar_with_xsds(jar_bytes, target_xsd, perm_xsds):
     return out.getvalue(), n
 
 
-def copy_and_patch(zip_src_path, zip_dst_path, target_xsd, perm_xsds, progress, cancel):
-    target = target_xsd.encode()
+def copy_and_patch(zip_src_path, zip_dst_path, target_xsd, perm_xsds, do_fix,
+                   progress, cancel):
+    target = target_xsd.encode() if target_xsd else b""
     patched = 0
     jar_repl = 0
     with zipfile.ZipFile(zip_src_path) as src, \
@@ -157,12 +158,12 @@ def copy_and_patch(zip_src_path, zip_dst_path, target_xsd, perm_xsds, progress, 
             if cancel.is_set():
                 raise _Cancelled()
             data = src.read(info.filename)
-            if (info.filename.startswith(SCHEMA_PREFIX)
-                    and info.filename.lower().endswith(".xml")
-                    and MARK in data):
+            if do_fix and (info.filename.startswith(SCHEMA_PREFIX)
+                           and info.filename.lower().endswith(".xml")
+                           and MARK in data):
                 data = data.replace(MARK, target)
                 patched += 1
-            elif info.filename == JAR_IN_ZIP and perm_xsds:
+            elif do_fix and info.filename == JAR_IN_ZIP and perm_xsds:
                 data, jar_repl = _rebuild_jar_with_xsds(data, target_xsd, perm_xsds)
             zi = zipfile.ZipInfo(info.filename, date_time=info.date_time)
             zi.compress_type = info.compress_type
@@ -241,7 +242,7 @@ class _Cancelled(Exception):
 
 # --------------------------------- worker ------------------------------------
 
-def worker(version, branch, msgq, cancel):
+def worker(version, branch, fix, msgq, cancel):
     def log(t):
         msgq.put(("log", t))
 
@@ -268,18 +269,24 @@ def worker(version, branch, msgq, cancel):
             log("ERRO: build.ver nao encontrado: %s" % src_ver)
             msgq.put(("done", False)); return
 
-        log("Detectando maior XSD empacotado no liquibase.jar...")
-        with zipfile.ZipFile(src_zip) as z:
-            target_xsd = newest_bundled_xsd(z)
-        log("  -> alvo: %s" % target_xsd)
+        target_xsd = ""
+        perm_xsds = {}
+        if fix:
+            log("Fix XSD: LIGADO")
+            log("Detectando maior XSD empacotado no liquibase.jar...")
+            with zipfile.ZipFile(src_zip) as z:
+                target_xsd = newest_bundled_xsd(z)
+            log("  -> alvo: %s" % target_xsd)
 
-        log("Carregando XSD permissivo de um liquibase 4.x instalado...")
-        perm_xsds, perm_src = load_permissive_xsds()
-        if perm_xsds:
-            log("  -> %s (de %s)" % (", ".join(sorted(perm_xsds)), perm_src))
+            log("Carregando XSD permissivo de um liquibase 4.x instalado...")
+            perm_xsds, perm_src = load_permissive_xsds()
+            if perm_xsds:
+                log("  -> %s (de %s)" % (", ".join(sorted(perm_xsds)), perm_src))
+            else:
+                log("  AVISO: liquibase 4.x nao encontrado; o XSD %s (estrito) pode "
+                    "rejeitar atributos novos (ex: dataType em createSequence)." % target_xsd)
         else:
-            log("  AVISO: liquibase 4.x nao encontrado; o XSD %s (estrito) pode "
-                "rejeitar atributos novos (ex: dataType em createSequence)." % target_xsd)
+            log("Fix XSD: DESLIGADO (copia o build.zip sem patch)")
 
         log("Limpando pacote (preserva %s)..." % ", ".join(sorted(KEEP)))
         clean_pacote()
@@ -287,16 +294,19 @@ def worker(version, branch, msgq, cancel):
         log("Copiando build.ver...")
         shutil.copyfile(src_ver, dst_ver)
 
-        log("Copiando + patchando build.zip...")
+        log("Copiando%s build.zip..." % (" + patchando" if fix else ""))
 
         def prog(done, total, patched):
             msgq.put(("prog", done, total, patched))
 
-        n, jar_repl = copy_and_patch(src_zip, dst_zip, target_xsd, perm_xsds, prog, cancel)
-        log("  -> %d changelog(s) reescritos (dbchangelog-latest.xsd -> %s)" % (n, target_xsd))
-        log("  -> %d XSD(s) do liquibase.jar trocados pelo schema permissivo" % jar_repl)
-        if n == 0:
-            log("  AVISO: nenhum changelog continha 'dbchangelog-latest.xsd'.")
+        n, jar_repl = copy_and_patch(src_zip, dst_zip, target_xsd, perm_xsds, fix,
+                                     prog, cancel)
+        if fix:
+            log("  -> %d changelog(s) reescritos (dbchangelog-latest.xsd -> %s)"
+                % (n, target_xsd))
+            log("  -> %d XSD(s) do liquibase.jar trocados pelo schema permissivo" % jar_repl)
+            if n == 0:
+                log("  AVISO: nenhum changelog continha 'dbchangelog-latest.xsd'.")
 
         if cancel.is_set():
             raise _Cancelled()
@@ -379,8 +389,8 @@ class App:
         self.cancel = threading.Event()
         self.thread = None
 
-        root.title("Ajustar XSD Liquibase")
-        root.geometry("760x480")
+        root.title("Updater Lite Util")
+        root.geometry("820x480")
 
         top = ttk.Frame(root, padding=8)
         top.pack(fill="x")
@@ -392,11 +402,14 @@ class App:
         ttk.Label(top, text="Versão:").grid(row=0, column=2, sticky="w")
         self.e_ver = ttk.Entry(top, width=14)
         self.e_ver.grid(row=0, column=3, padx=(4, 16))
+        self.fix_xsd = tk.BooleanVar(value=True)
+        self.chk_fix = ttk.Checkbutton(top, text="Fix XSD", variable=self.fix_xsd)
+        self.chk_fix.grid(row=0, column=4, padx=(0, 12))
         self.btn_start = ttk.Button(top, text="Iniciar", command=self.on_start)
-        self.btn_start.grid(row=0, column=4, padx=4)
+        self.btn_start.grid(row=0, column=5, padx=4)
         self.btn_cancel = ttk.Button(top, text="Cancelar", command=self.on_cancel,
                                      state="disabled")
-        self.btn_cancel.grid(row=0, column=5, padx=4)
+        self.btn_cancel.grid(row=0, column=6, padx=4)
 
         pf = ttk.Frame(root, padding=(8, 0))
         pf.pack(fill="x")
@@ -441,8 +454,9 @@ class App:
         ver = self.e_ver.get().strip()
         # combobox mostra capitalizado; o dir do share e minusculo
         branch = (self.e_branch.get().strip() or "develop").lower()
+        fix = bool(self.fix_xsd.get())
         self.thread = threading.Thread(
-            target=worker, args=(ver, branch, self.msgq, self.cancel), daemon=True)
+            target=worker, args=(ver, branch, fix, self.msgq, self.cancel), daemon=True)
         self.thread.start()
 
     def on_cancel(self):

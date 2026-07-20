@@ -36,12 +36,14 @@ schema mais novo (ex.: `cvc-complex-type.3.2.2 dataType em createSequence`).
 
 ## Uso
 
-Dois cliques em `atualizar_versao_fix_liquibase.bat` (abre a GUI). Se não houver Python 3,
+Dois cliques em `UpdaterLiteUtil.bat` (abre a GUI). Se não houver Python 3,
 o `.bat` baixa e instala o oficial (com tkinter) automaticamente.
 
 Na janela:
 - **Branch**: Develop / Release / Master
 - **Versão**: ex. `2.80.03`
+- **Fix XSD** (marcado por padrão): aplica o patch descrito acima. Desmarcado, apenas copia o
+  `build.zip` do share sem alterar e roda o updater (comportamento normal).
 - **Iniciar** (valida os campos) / **Cancelar**
 - Barra de progresso + log do updater ao vivo. No fim consulta `sgrsis01` e informa a versão.
 
@@ -49,5 +51,5 @@ A base atualizada é a configurada em `C:\SysmoVs\dbxconnections.ini` (`DataBase
 
 ## Arquivos
 
-- `atualizar_versao_fix_liquibase.py` — GUI + lógica.
-- `atualizar_versao_fix_liquibase.bat` — wrapper (acha/baixa Python).
+- `UpdaterLiteUtil.py` — GUI + lógica.
+- `UpdaterLiteUtil.bat` — wrapper (acha/baixa Python).
