@@ -43,9 +43,11 @@ encontrado, o `.bat` exibe uma mensagem na tela com essas instruções.
 Na janela:
 - **Branch**: Develop / Release / Master
 - **Versão**: ex. `2.80.03`
-- **Fix XSD** (marcado por padrão): aplica o patch descrito acima. Desmarcado, apenas copia o
-  `build.zip` do share sem alterar e roda o updater (comportamento normal).
 - **Iniciar** (valida os campos) / **Cancelar**
+
+O fix é aplicado **automaticamente só quando necessário**: o utilitário abre o `liquibase.jar`
+dentro do build.zip; se ele já empacota `dbchangelog-latest.xsd` (liquibase 4.x, resolve offline),
+o patch é pulado; se for o 3.5 estrito, o patch é aplicado.
 - Barra de progresso + log do updater ao vivo. No fim consulta `sgrsis01` e informa a versão.
 
 A base atualizada é a configurada em `C:\SysmoVs\dbxconnections.ini` (`DataBase=`).

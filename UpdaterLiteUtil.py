@@ -265,7 +265,7 @@ class _Cancelled(Exception):
 
 # --------------------------------- worker ------------------------------------
 
-def worker(version, branch, fix, msgq, cancel):
+def worker(version, branch, msgq, cancel):
     def log(t):
         msgq.put(("log", t))
 
@@ -296,29 +296,26 @@ def worker(version, branch, fix, msgq, cancel):
         target_xsd = ""
         perm_xsds = {}
         do_fix = False
-        if fix:
-            log("Fix XSD: LIGADO")
-            log("Localizando o liquibase.jar dentro do build.zip...")
-            with zipfile.ZipFile(src_zip) as z:
-                jar_name, has_latest, newest = find_liquibase_in_zip(z)
-            if jar_name is None:
-                log("  liquibase.jar nao encontrado no zip -> copiando sem patch.")
-            elif has_latest:
-                log("  %s ja empacota dbchangelog-latest.xsd (resolve offline)." % jar_name)
-                log("  -> fix DESNECESSARIO nesta versao; copiando sem patch.")
-            else:
-                do_fix = True
-                target_xsd = newest
-                log("  jar: %s | maior XSD empacotado: %s" % (jar_name, target_xsd))
-                log("Carregando XSD permissivo de um liquibase 4.x instalado...")
-                perm_xsds, perm_src = load_permissive_xsds()
-                if perm_xsds:
-                    log("  -> %s (de %s)" % (", ".join(sorted(perm_xsds)), perm_src))
-                else:
-                    log("  AVISO: liquibase 4.x nao encontrado; o XSD %s (estrito) pode "
-                        "rejeitar atributos novos (ex: dataType em createSequence)." % target_xsd)
+        log("Analisando o liquibase do build.zip (fix XSD so se necessario)...")
+        with zipfile.ZipFile(src_zip) as z:
+            jar_name, has_latest, newest = find_liquibase_in_zip(z)
+        if jar_name is None:
+            log("  liquibase.jar nao encontrado no zip -> copiando sem patch.")
+        elif has_latest:
+            log("  %s ja empacota dbchangelog-latest.xsd (resolve offline)." % jar_name)
+            log("  -> fix DESNECESSARIO nesta versao; copiando sem patch.")
         else:
-            log("Fix XSD: DESLIGADO (copia o build.zip sem patch)")
+            do_fix = True
+            target_xsd = newest
+            log("  jar: %s | maior XSD empacotado: %s" % (jar_name, target_xsd))
+            log("  -> fix NECESSARIO (nao tem dbchangelog-latest offline).")
+            log("Carregando XSD permissivo de um liquibase 4.x instalado...")
+            perm_xsds, perm_src = load_permissive_xsds()
+            if perm_xsds:
+                log("  -> %s (de %s)" % (", ".join(sorted(perm_xsds)), perm_src))
+            else:
+                log("  AVISO: liquibase 4.x nao encontrado; o XSD %s (estrito) pode "
+                    "rejeitar atributos novos (ex: dataType em createSequence)." % target_xsd)
 
         log("Limpando pacote (preserva %s)..." % ", ".join(sorted(KEEP)))
         clean_pacote()
@@ -434,14 +431,11 @@ class App:
         ttk.Label(top, text="Versão:").grid(row=0, column=2, sticky="w")
         self.e_ver = ttk.Entry(top, width=14)
         self.e_ver.grid(row=0, column=3, padx=(4, 16))
-        self.fix_xsd = tk.BooleanVar(value=True)
-        self.chk_fix = ttk.Checkbutton(top, text="Fix XSD", variable=self.fix_xsd)
-        self.chk_fix.grid(row=0, column=4, padx=(0, 12))
         self.btn_start = ttk.Button(top, text="Iniciar", command=self.on_start)
-        self.btn_start.grid(row=0, column=5, padx=4)
+        self.btn_start.grid(row=0, column=4, padx=4)
         self.btn_cancel = ttk.Button(top, text="Cancelar", command=self.on_cancel,
                                      state="disabled")
-        self.btn_cancel.grid(row=0, column=6, padx=4)
+        self.btn_cancel.grid(row=0, column=5, padx=4)
 
         pf = ttk.Frame(root, padding=(8, 0))
         pf.pack(fill="x")
@@ -486,9 +480,8 @@ class App:
         ver = self.e_ver.get().strip()
         # combobox mostra capitalizado; o dir do share e minusculo
         branch = (self.e_branch.get().strip() or "develop").lower()
-        fix = bool(self.fix_xsd.get())
         self.thread = threading.Thread(
-            target=worker, args=(ver, branch, fix, self.msgq, self.cancel), daemon=True)
+            target=worker, args=(ver, branch, self.msgq, self.cancel), daemon=True)
         self.thread.start()
 
     def on_cancel(self):
